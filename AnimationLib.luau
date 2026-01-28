@@ -102,6 +102,7 @@ function AnimationLib.PlayPack(idle, walkRun, jump, fall, climb)
         animId = anim2track(animId)
         local anim = Instance.new("Animation")
         anim.AnimationId = animId
+		anim.Looped = true
         local track = humanoid:LoadAnimation(anim)
         track.Priority = AnimationLib.PackDefaults.Priority
         return track
