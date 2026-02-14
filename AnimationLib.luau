@@ -3,28 +3,25 @@ local currentTracks = {}
 local currentConnections = {}
 local defaultWalkSpeed = 16
 local localPlayer = game:GetService("Players").LocalPlayer
+local currentAnimations = {}
+local isRunning = false
+local isWalking = false
 
 local function clearCurrentAnimations()
-    if localPlayer.Character then
-        local humanoid = localPlayer.Character:FindFirstChildOfClass("Humanoid")
-        if humanoid then
-            local animator = humanoid:FindFirstChildOfClass("Animator")
-            if animator then
-                for _, track in pairs(currentTracks) do
-                    if track and track.IsPlaying then
-                        track:Stop()
-                    end
-                end
-                for _, connection in pairs(currentConnections) do
-                    if connection then
-                        connection:Disconnect()
-                    end
-                end
-            end
+    for _, track in pairs(currentTracks) do
+        if track and track.IsPlaying then
+            track:Stop(0.1)
+        end
+    end
+    for _, connection in pairs(currentConnections) do
+        if connection then
+            connection:Disconnect()
         end
     end
     currentTracks = {}
     currentConnections = {}
+    isRunning = false
+    isWalking = false
 end
 
 local function anim2track(asset_id)
@@ -51,20 +48,29 @@ local function loadAnimation(animator, id)
     anim.AnimationId = resolvedId
     local track = animator:LoadAnimation(anim)
     track.Priority = Enum.AnimationPriority.Core
+    track.Looped = true
     return track
-end
-
-local function getFallbackTrack(tracks, preferredOrder)
-    for _, animType in ipairs(preferredOrder) do
-        if tracks[animType] then
-            return tracks[animType]
-        end
-    end
-    return nil
 end
 
 local function getCharacter()
     return localPlayer.Character or localPlayer.CharacterAdded:Wait()
+end
+
+local function playAnimation(track, speed, fadeTime)
+    if not track then return end
+    fadeTime = fadeTime or 0.2
+    if track.IsPlaying then
+        track:AdjustSpeed(speed)
+    else
+        track:Play(fadeTime)
+        track:AdjustSpeed(speed)
+    end
+end
+
+local function stopAnimation(track, fadeTime)
+    if track and track.IsPlaying then
+        track:Stop(fadeTime or 0.2)
+    end
 end
 
 function AnimationOverride.Apply(animations, customWalkSpeed)
@@ -75,121 +81,139 @@ function AnimationOverride.Apply(animations, customWalkSpeed)
     if not humanoid then return end
     local animator = humanoid:FindFirstChildOfClass("Animator")
     if not animator then return end
-    if not animations.Idle then
-        animations.Idle = "rbxassetid://507776043"
-    end
-    for animType, id in pairs(animations) do
-        currentTracks[animType] = loadAnimation(animator, id)
-    end
+
+    -- Load all animations with fallbacks
+    currentAnimations = {
+        Idle = loadAnimation(animator, animations.Idle or "rbxassetid://507776043"),
+        Walk = loadAnimation(animator, animations.Walk or animations.Idle or "rbxassetid://507776043"),
+        Run = loadAnimation(animator, animations.Run or animations.Walk or animations.Idle or "rbxassetid://507776043"),
+        Jump = loadAnimation(animator, animations.Jump or animations.Idle or "rbxassetid://507776043"),
+        Fall = loadAnimation(animator, animations.Fall or animations.Idle or "rbxassetid://507776043"),
+        Swim = loadAnimation(animator, animations.Swim or animations.Idle or "rbxassetid://507776043"),
+        SwimIdle = loadAnimation(animator, animations.SwimIdle or animations.Swim or animations.Idle or "rbxassetid://507776043"),
+        Climb = loadAnimation(animator, animations.Climb or animations.Idle or "rbxassetid://507776043"),
+        ClimbIdle = loadAnimation(animator, animations.ClimbIdle or animations.Climb or animations.Idle or "rbxassetid://507776043"),
+        Death = loadAnimation(animator, animations.Death or animations.Idle or "rbxassetid://507776043")
+    }
+
+    -- Set up connections with debounce
+    local lastState = ""
+    local lastSpeed = 0
+
     table.insert(currentConnections, humanoid.Running:Connect(function(speed)
         if speed > 0 then
             local shouldRun = humanoid.WalkSpeed > defaultWalkSpeed
-            if shouldRun then
-                local runTrack = currentTracks.Run or getFallbackTrack(currentTracks, {"Walk", "Idle"})
-                if runTrack then
-                    runTrack:Play()
-                    runTrack:AdjustSpeed(speed/16)
-                end
-                if currentTracks.Walk and currentTracks.Walk.IsPlaying then
-                    currentTracks.Walk:Stop()
+            local currentState = shouldRun and "Run" or "Walk"
+
+            -- Only change if state actually changed
+            if currentState ~= lastState or math.abs(speed - lastSpeed) > 1 then
+                lastState = currentState
+                lastSpeed = speed
+
+                -- Stop previous movement animations
+                stopAnimation(currentAnimations.Walk, 0.1)
+                stopAnimation(currentAnimations.Run, 0.1)
+
+                -- Play appropriate animation
+                if shouldRun then
+                    isRunning = true
+                    isWalking = false
+                    playAnimation(currentAnimations.Run, speed/16, 0.1)
+                else
+                    isRunning = false
+                    isWalking = true
+                    playAnimation(currentAnimations.Walk, speed/16, 0.1)
                 end
             else
-                local walkTrack = currentTracks.Walk or getFallbackTrack(currentTracks, {"Run", "Idle"})
-                if walkTrack then
-                    walkTrack:Play()
-                    walkTrack:AdjustSpeed(speed/16)
-                end
-                if currentTracks.Run and currentTracks.Run.IsPlaying then
-                    currentTracks.Run:Stop()
+                -- Just adjust speed if same animation
+                if isRunning and currentAnimations.Run then
+                    currentAnimations.Run:AdjustSpeed(speed/16)
+                elseif isWalking and currentAnimations.Walk then
+                    currentAnimations.Walk:AdjustSpeed(speed/16)
                 end
             end
         else
-            if currentTracks.Idle then
-                currentTracks.Idle:Play()
-            end
-            if currentTracks.Walk and currentTracks.Walk.IsPlaying then
-                currentTracks.Walk:Stop()
-            end
-            if currentTracks.Run and currentTracks.Run.IsPlaying then
-                currentTracks.Run:Stop()
+            -- Stopped moving
+            if lastState ~= "Idle" then
+                lastState = "Idle"
+                stopAnimation(currentAnimations.Walk, 0.1)
+                stopAnimation(currentAnimations.Run, 0.1)
+                playAnimation(currentAnimations.Idle, 1, 0.1)
+                isRunning = false
+                isWalking = false
             end
         end
     end))
+
     table.insert(currentConnections, humanoid.Jumping:Connect(function()
-        local jumpTrack = currentTracks.Jump or currentTracks.Idle
-        if jumpTrack then
-            jumpTrack:Play()
-            if currentTracks.Run and currentTracks.Run.IsPlaying then
-                currentTracks.Run:Stop()
-            end
-            if currentTracks.Walk and currentTracks.Walk.IsPlaying then
-                currentTracks.Walk:Stop()
-            end
+        if lastState ~= "Jump" then
+            lastState = "Jump"
+            stopAnimation(currentAnimations.Walk, 0.1)
+            stopAnimation(currentAnimations.Run, 0.1)
+            playAnimation(currentAnimations.Jump, 1, 0.1)
+            isRunning = false
+            isWalking = false
         end
     end))
+
     table.insert(currentConnections, humanoid.FreeFalling:Connect(function()
-        local fallTrack = currentTracks.Fall or currentTracks.Idle
-        if fallTrack then
-            fallTrack:Play()
-            if currentTracks.Jump and currentTracks.Jump.IsPlaying then
-                currentTracks.Jump:Stop()
-            end
+        if lastState ~= "Fall" then
+            lastState = "Fall"
+            stopAnimation(currentAnimations.Jump, 0.1)
+            playAnimation(currentAnimations.Fall, 1, 0.1)
         end
     end))
+
     table.insert(currentConnections, humanoid.Swimming:Connect(function(speed)
         if speed > 0 then
-            local swimTrack = currentTracks.Swim or currentTracks.Idle
-            if swimTrack then
-                swimTrack:Play()
-                swimTrack:AdjustSpeed(speed/16)
-                if currentTracks.SwimIdle and currentTracks.SwimIdle.IsPlaying then
-                    currentTracks.SwimIdle:Stop()
-                end
+            if lastState ~= "Swim" then
+                lastState = "Swim"
+                stopAnimation(currentAnimations.SwimIdle, 0.1)
+                playAnimation(currentAnimations.Swim, speed/16, 0.1)
+            else
+                currentAnimations.Swim:AdjustSpeed(speed/16)
             end
         else
-            local swimIdleTrack = currentTracks.SwimIdle or currentTracks.Idle
-            if swimIdleTrack then
-                swimIdleTrack:Play()
-                if currentTracks.Swim and currentTracks.Swim.IsPlaying then
-                    currentTracks.Swim:Stop()
-                end
+            if lastState ~= "SwimIdle" then
+                lastState = "SwimIdle"
+                stopAnimation(currentAnimations.Swim, 0.1)
+                playAnimation(currentAnimations.SwimIdle, 1, 0.1)
             end
         end
     end))
+
     table.insert(currentConnections, humanoid.Climbing:Connect(function(speed)
         if speed > 0 then
-            local climbTrack = currentTracks.Climb or currentTracks.Idle
-            if climbTrack then
-                climbTrack:Play()
-                climbTrack:AdjustSpeed(speed/16)
-                if currentTracks.ClimbIdle and currentTracks.ClimbIdle.IsPlaying then
-                    currentTracks.ClimbIdle:Stop()
-                end
+            if lastState ~= "Climb" then
+                lastState = "Climb"
+                stopAnimation(currentAnimations.ClimbIdle, 0.1)
+                playAnimation(currentAnimations.Climb, speed/16, 0.1)
+            else
+                currentAnimations.Climb:AdjustSpeed(speed/16)
             end
         else
-            local climbIdleTrack = currentTracks.ClimbIdle or currentTracks.Idle
-            if climbIdleTrack then
-                climbIdleTrack:Play()
-                if currentTracks.Climb and currentTracks.Climb.IsPlaying then
-                    currentTracks.Climb:Stop()
-                end
+            if lastState ~= "ClimbIdle" then
+                lastState = "ClimbIdle"
+                stopAnimation(currentAnimations.Climb, 0.1)
+                playAnimation(currentAnimations.ClimbIdle, 1, 0.1)
             end
         end
     end))
+
     table.insert(currentConnections, humanoid.Died:Connect(function()
-        local deathTrack = currentTracks.Death or currentTracks.Idle
-        if deathTrack then
-            deathTrack:Play()
-            for animType, track in pairs(currentTracks) do
+        if lastState ~= "Death" then
+            lastState = "Death"
+            for animType, track in pairs(currentAnimations) do
                 if animType ~= "Death" and track and track.IsPlaying then
-                    track:Stop()
+                    stopAnimation(track, 0.1)
                 end
             end
+            playAnimation(currentAnimations.Death, 1, 0.1)
         end
     end))
-    if currentTracks.Idle then
-        currentTracks.Idle:Play()
-    end
+
+    -- Play idle animation immediately
+    playAnimation(currentAnimations.Idle, 1, 0.1)
 end
 
 function AnimationOverride.Clear()
