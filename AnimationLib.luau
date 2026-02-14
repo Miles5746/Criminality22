@@ -98,11 +98,10 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
         animId = anim2track(animId)
         local anim = Instance.new("Animation")
         anim.AnimationId = animId
-        anim.Looped = true
 
         local track = humanoid:LoadAnimation(anim)
-        track.Looped = true
         track.Priority = AnimationLib.PackDefaults.Priority
+        track.Looped = true  -- Set looped on the track, not animation
         return track
     end
 
