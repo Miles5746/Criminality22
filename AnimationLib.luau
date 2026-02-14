@@ -1,136 +1,65 @@
-local AnimationLib = {}
+local AnimationOverride = {}
+local currentCharacter = nil
+local currentTracks = {}
+local currentConnections = {}
 
-local DEFAULT_PRIORITY = Enum.AnimationPriority.Core
-local DEFAULT_FADE_TIME = 0.2
-local DEFAULT_SPEED = 1
-local currentPlayingPack = nil
-
-local function getCharacter()
-    local players = game:GetService("Players")
-    local localPlayer = players.LocalPlayer
-    return localPlayer and localPlayer.Character or workspace:FindFirstChildOfClass("Model")
-end
-
-local function stopCurrentPack()
-    if currentPlayingPack then
-        currentPlayingPack.Stop()
-        currentPlayingPack = nil
-    end
-end
-
-function AnimationLib.PlaySeq(animationSequence, settings)
-    stopCurrentPack()
-
-    local character = getCharacter()
-    if not character then return end
-
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
-    if not animator then return end
-
-    settings = settings or {}
-    local currentTrack = nil
-    local sequenceComplete = false
-    local currentIndex = 1
-    local tracks = {}
-
-    for i, animData in ipairs(animationSequence) do
-        local animId = typeof(animData) == "string" and animData or animData[1]
-        local animation = Instance.new("Animation")
-        animation.AnimationId = "rbxassetid://"..tostring(animId):match("%d+")
-
-        local track = animator:LoadAnimation(animation)
-        if track then
-            track.Priority = settings.priority or DEFAULT_PRIORITY
-            track:AdjustSpeed(settings.speed or DEFAULT_SPEED)
-
-            tracks[i] = {
-                track = track,
-                startTime = typeof(animData) == "table" and animData[2] or 0,
-                endTime = typeof(animData) == "table" and animData[3] or track.Length,
-                speed = typeof(animData) == "table" and animData[4] or (settings.speed or DEFAULT_SPEED),
-                priority = typeof(animData) == "table" and animData[5] or (settings.priority or DEFAULT_PRIORITY),
-                fadeTime = typeof(animData) == "table" and animData[6] or (settings.fadeTime or DEFAULT_FADE_TIME)
-            }
-        end
-    end
-
-    if #tracks == 0 then return end
-
-    local function playNext(index)
-        if sequenceComplete or not tracks[index] then
-            sequenceComplete = true
-            currentPlayingPack = nil
-            return
-        end
-
-        currentIndex = index
-        local data = tracks[index]
-
-        if currentTrack then
-            currentTrack:Stop(data.fadeTime or 0)
-        end
-
-        currentTrack = data.track
-        currentTrack.Priority = data.priority
-        currentTrack:AdjustSpeed(data.speed)
-
-        if data.startTime > 0 then
-            currentTrack:Play(data.fadeTime, data.startTime)
-        else
-            currentTrack:Play(data.fadeTime)
-        end
-
-        local duration = (data.endTime - data.startTime) / data.speed
-
-        if index < #tracks then
-            task.delay(duration, function()
-                if not sequenceComplete then
-                    playNext(index + 1)
+local function clearCurrentAnimations()
+    if currentCharacter then
+        local humanoid = currentCharacter:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            local animator = humanoid:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in pairs(currentTracks) do
+                    if track and track.IsPlaying then
+                        track:Stop()
+                    end
                 end
-            end)
+                for _, connection in pairs(currentConnections) do
+                    if connection then
+                        connection:Disconnect()
+                    end
+                end
+            end
         end
     end
 
-    playNext(1)
-
-    currentPlayingPack = {
-        Stop = function()
-            sequenceComplete = true
-            if currentTrack then
-                currentTrack:Stop()
-            end
-            currentPlayingPack = nil
-        end,
-
-        Pause = function()
-            if currentTrack then
-                currentTrack:AdjustSpeed(0)
-            end
-        end,
-
-        Resume = function()
-            if currentTrack then
-                local data = tracks[currentIndex]
-                currentTrack:AdjustSpeed(data.speed)
-            end
-        end,
-
-        GetCurrentTrack = function()
-            return currentTrack
-        end,
-
-        GetCurrentIndex = function()
-            return currentIndex
-        end
-    }
-
-    return currentPlayingPack
+    currentTracks = {}
+    currentConnections = {}
 end
 
-function AnimationLib.StopAll()
-    local character = getCharacter()
-    if not character then return end
+local function anim2track(asset_id)
+    if typeof(asset_id) == "Instance" and asset_id:IsA("Animation") then
+        return asset_id.AnimationId
+    end
+
+    if type(asset_id) == "string" and asset_id:match("rbxassetid://") then
+        return asset_id
+    end
+
+    local success, objs = pcall(game.GetObjects, game, "rbxassetid://"..tostring(asset_id):match("%d+"))
+    if not success or not objs or #objs == 0 then return "rbxassetid://"..tostring(asset_id) end
+
+    for i = 1, #objs do
+        if objs[i]:IsA("Animation") then
+            return objs[i].AnimationId
+        end
+    end
+
+    return "rbxassetid://"..tostring(asset_id)
+end
+
+local function loadAnimation(animator, id)
+    local resolvedId = anim2track(id)
+    local anim = Instance.new("Animation")
+    anim.AnimationId = resolvedId
+    local track = animator:LoadAnimation(anim)
+    track.Priority = Enum.AnimationPriority.Core
+    return track
+end
+
+function AnimationOverride.Apply(character, animations)
+    clearCurrentAnimations()
+    currentCharacter = character
 
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not humanoid then return end
@@ -138,25 +67,115 @@ function AnimationLib.StopAll()
     local animator = humanoid:FindFirstChildOfClass("Animator")
     if not animator then return end
 
-    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-        track:Stop()
+    -- Load all animations
+    for animType, id in pairs(animations) do
+        currentTracks[animType] = loadAnimation(animator, id)
+    end
+
+    -- Set up connections
+    table.insert(currentConnections, humanoid.Running:Connect(function(speed)
+        if currentTracks.Run and speed > 12 then
+            currentTracks.Run:Play()
+            currentTracks.Run:AdjustSpeed(speed/16)
+            if currentTracks.Walk and currentTracks.Walk.IsPlaying then
+                currentTracks.Walk:Stop()
+            end
+        elseif currentTracks.Walk and speed > 0 then
+            currentTracks.Walk:Play()
+            currentTracks.Walk:AdjustSpeed(speed/16)
+            if currentTracks.Run and currentTracks.Run.IsPlaying then
+                currentTracks.Run:Stop()
+            end
+        elseif currentTracks.Idle and speed <= 0 then
+            currentTracks.Idle:Play()
+            if currentTracks.Walk and currentTracks.Walk.IsPlaying then
+                currentTracks.Walk:Stop()
+            end
+            if currentTracks.Run and currentTracks.Run.IsPlaying then
+                currentTracks.Run:Stop()
+            end
+        end
+    end))
+
+    table.insert(currentConnections, humanoid.Jumping:Connect(function()
+        if currentTracks.Jump then
+            currentTracks.Jump:Play()
+            if currentTracks.Run and currentTracks.Run.IsPlaying then
+                currentTracks.Run:Stop()
+            end
+            if currentTracks.Walk and currentTracks.Walk.IsPlaying then
+                currentTracks.Walk:Stop()
+            end
+        end
+    end))
+
+    table.insert(currentConnections, humanoid.FreeFalling:Connect(function()
+        if currentTracks.Fall then
+            currentTracks.Fall:Play()
+            if currentTracks.Jump and currentTracks.Jump.IsPlaying then
+                currentTracks.Jump:Stop()
+            end
+        end
+    end))
+
+    table.insert(currentConnections, humanoid.Swimming:Connect(function(speed)
+        if speed > 0 then
+            if currentTracks.Swim then
+                currentTracks.Swim:Play()
+                currentTracks.Swim:AdjustSpeed(speed/16)
+                if currentTracks.SwimIdle and currentTracks.SwimIdle.IsPlaying then
+                    currentTracks.SwimIdle:Stop()
+                end
+            end
+        else
+            if currentTracks.SwimIdle then
+                currentTracks.SwimIdle:Play()
+                if currentTracks.Swim and currentTracks.Swim.IsPlaying then
+                    currentTracks.Swim:Stop()
+                end
+            end
+        end
+    end))
+
+    table.insert(currentConnections, humanoid.Climbing:Connect(function(speed)
+        if speed > 0 then
+            if currentTracks.Climb then
+                currentTracks.Climb:Play()
+                currentTracks.Climb:AdjustSpeed(speed/16)
+                if currentTracks.ClimbIdle and currentTracks.ClimbIdle.IsPlaying then
+                    currentTracks.ClimbIdle:Stop()
+                end
+            end
+        else
+            if currentTracks.ClimbIdle then
+                currentTracks.ClimbIdle:Play()
+                if currentTracks.Climb and currentTracks.Climb.IsPlaying then
+                    currentTracks.Climb:Stop()
+                end
+            end
+        end
+    end))
+
+    table.insert(currentConnections, humanoid.Died:Connect(function()
+        if currentTracks.Death then
+            currentTracks.Death:Play()
+            for animType, track in pairs(currentTracks) do
+                if animType ~= "Death" and track.IsPlaying then
+                    track:Stop()
+                end
+            end
+        end
+    end))
+
+    -- Play idle animation immediately
+    if currentTracks.Idle then
+        currentTracks.Idle:Play()
     end
 end
 
-function AnimationLib.FadeOutAll(fadeTime)
-    fadeTime = fadeTime or 0.3
-    local character = getCharacter()
-    if not character then return end
-
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
-
-    local animator = humanoid:FindFirstChildOfClass("Animator")
-    if not animator then return end
-
-    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-        track:Stop(fadeTime)
-    end
+function AnimationOverride.Clear()
+    clearCurrentAnimations()
+    currentCharacter = nil
 end
 
-return AnimationLib
+return AnimationOverride
