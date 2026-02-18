@@ -11,7 +11,7 @@ AnimationLib.PackDefaults = {
     Speed = 1,
     Priority = Enum.AnimationPriority.Movement,
     FadeTime = 0.15,
-    WalkSpeedThreshold = 16  -- Default threshold for walk/run transition
+    WalkSpeedThreshold = 16
 }
 
 local function anim2track(asset_id)
@@ -78,10 +78,7 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
     local character = player.Character or player.CharacterAdded:Wait()
     local humanoid = character:WaitForChild("Humanoid")
 
-    -- Set default threshold if not provided
     walkSpeedThreshold = walkSpeedThreshold or AnimationLib.PackDefaults.WalkSpeedThreshold
-
-    -- Set default animations if not provided
     jump = jump or idle
     fall = fall or idle
     climb = climb or idle
@@ -101,7 +98,7 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
 
         local track = humanoid:LoadAnimation(anim)
         track.Priority = AnimationLib.PackDefaults.Priority
-        track.Looped = true  -- Set looped on the track, not animation
+        track.Looped = true
         return track
     end
 
@@ -116,6 +113,7 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
 
     local currentTrack = nil
     local currentState = "Idle"
+    local activeConnections = {}
 
     local function stopAll()
         for name, track in pairs(tracks) do
@@ -138,14 +136,20 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
         track:AdjustSpeed(speed or 1)
     end
 
-    -- Play idle immediately
+    local function disconnectAll()
+        for _, conn in pairs(activeConnections) do
+            if conn and conn.Connected then
+                conn:Disconnect()
+            end
+        end
+        activeConnections = {}
+    end
+
     if tracks.Idle then
         playTrack(tracks.Idle, 1)
     end
 
-    -- Movement handling
-    local runningConn
-    runningConn = humanoid.Running:Connect(function(speed)
+    local runningConn = humanoid.Running:Connect(function(speed)
         if speed > 0.1 then
             local shouldRun = humanoid.WalkSpeed > walkSpeedThreshold
             local newState = shouldRun and "Run" or "Walk"
@@ -157,7 +161,6 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
                     playTrack(track, speed / 16)
                 end
             else
-                -- Just adjust speed if same state
                 if currentTrack then
                     currentTrack:AdjustSpeed(speed / 16)
                 end
@@ -171,10 +174,9 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
             end
         end
     end)
+    table.insert(activeConnections, runningConn)
 
-    -- Jump handling
-    local jumpingConn
-    jumpingConn = humanoid.Jumping:Connect(function()
+    local jumpingConn = humanoid.Jumping:Connect(function()
         if currentState ~= "Jump" then
             currentState = "Jump"
             if tracks.Jump then
@@ -182,10 +184,9 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
             end
         end
     end)
+    table.insert(activeConnections, jumpingConn)
 
-    -- Fall handling
-    local freeFallingConn
-    freeFallingConn = humanoid.FreeFalling:Connect(function(active)
+    local freeFallingConn = humanoid.FreeFalling:Connect(function(active)
         if active and currentState ~= "Fall" then
             currentState = "Fall"
             if tracks.Fall then
@@ -193,10 +194,9 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
             end
         end
     end)
+    table.insert(activeConnections, freeFallingConn)
 
-    -- Climb handling
-    local climbingConn
-    climbingConn = humanoid.Climbing:Connect(function(speed)
+    local climbingConn = humanoid.Climbing:Connect(function(speed)
         if speed ~= 0 and currentState ~= "Climb" then
             currentState = "Climb"
             if tracks.Climb then
@@ -209,38 +209,19 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
             end
         end
     end)
+    table.insert(activeConnections, climbingConn)
 
-    -- Character respawn handling
-    local characterAddedConn
-    characterAddedConn = player.CharacterAdded:Connect(function(newCharacter)
-        if runningConn then runningConn:Disconnect() end
-        if jumpingConn then jumpingConn:Disconnect() end
-        if freeFallingConn then freeFallingConn:Disconnect() end
-        if climbingConn then climbingConn:Disconnect() end
-        if characterAddedConn then characterAddedConn:Disconnect() end
-
-        -- Reapply animations to new character
-        task.wait(1) -- Wait for character to fully load
+    local characterAddedConn = player.CharacterAdded:Connect(function(newCharacter)
+        disconnectAll()
+        task.wait(1)
         AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, climb)
     end)
-
-    -- Store connections for potential cleanup
-    local connections = {
-        runningConn,
-        jumpingConn,
-        freeFallingConn,
-        climbingConn,
-        characterAddedConn
-    }
+    table.insert(activeConnections, characterAddedConn)
 
     return {
         Stop = function()
             stopAll()
-            for _, conn in ipairs(connections) do
-                if conn and conn.Connected then
-                    conn:Disconnect()
-                end
-            end
+            disconnectAll()
         end,
         SetWalkSpeedThreshold = function(newThreshold)
             walkSpeedThreshold = newThreshold
@@ -253,9 +234,10 @@ end
 
 function AnimationLib.StopAll()
     local player = game:GetService("Players").LocalPlayer
-    local character = player.Character or player.CharacterAdded:Wait()
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local character = player.Character
+    if not character then return end
 
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not humanoid then return end
 
     local animator = humanoid:FindFirstChildOfClass("Animator")
