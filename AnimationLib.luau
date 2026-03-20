@@ -248,8 +248,7 @@ function AnimationLib.StopAll()
     end
 end
 
-function ReplaceAnimations(replacementTable)
-    -- Validate input
+function AnimationLib.ReplaceAnimations(replacementTable)
     if not replacementTable or type(replacementTable) ~= "table" then
         warn("ReplaceAnimations: Invalid replacement table provided!")
         return
