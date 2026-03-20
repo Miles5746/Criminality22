@@ -248,4 +248,36 @@ function AnimationLib.StopAll()
     end
 end
 
+function ReplaceAnimations(replacementTable)
+    -- Validate input
+    if not replacementTable or type(replacementTable) ~= "table" then
+        warn("ReplaceAnimations: Invalid replacement table provided!")
+        return
+    end
+    local player = game:GetService("Players").LocalPlayer
+    local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+
+    if not humanoid then
+        warn("ReplaceAnimations: Humanoid not found!")
+        return
+    end
+    local function onAnimationPlayed(animationTrack)
+        local animId = animationTrack.Animation.AnimationId:match("(%d+)") or animationTrack.Name
+        if replacementTable[animId] then
+            animationTrack:Stop()
+            local replacementId = replacementTable[animId]
+            local newAnim = Instance.new("Animation")
+            newAnim.AnimationId = "rbxassetid://" .. replacementId
+            local newTrack = humanoid:LoadAnimation(newAnim)
+            newTrack:Play()
+            print(`Replaced {animId} → {replacementId}`)
+        end
+    end
+    humanoid.AnimationPlayed:Connect(onAnimationPlayed)
+    return function(newTable)
+        replacementTable = newTable or replacementTable
+        print("Replacement table updated!")
+    end
+end
+
 return AnimationLib
