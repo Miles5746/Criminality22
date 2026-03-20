@@ -1,5 +1,6 @@
 local AnimationLib = {}
 
+-- Default settings
 AnimationLib.Defaults = {
     Speed = 1,
     StartTime = 0,
@@ -14,6 +15,7 @@ AnimationLib.PackDefaults = {
     WalkSpeedThreshold = 16
 }
 
+-- Helper function to convert animation IDs
 local function anim2track(asset_id)
     if typeof(asset_id) == "Instance" and asset_id:IsA("Animation") then
         return asset_id.AnimationId
@@ -34,10 +36,11 @@ local function anim2track(asset_id)
     return "rbxassetid://" .. tostring(asset_id):match("%d+")
 end
 
+-- Play a single animation
 function AnimationLib.PlayAnim(animid, speed, startTime, endTime, priority)
-    speed = speed or 1
-    startTime = startTime or 0
-    priority = priority or Enum.AnimationPriority.Core
+    speed = speed or AnimationLib.Defaults.Speed
+    startTime = startTime or AnimationLib.Defaults.StartTime
+    priority = priority or AnimationLib.Defaults.Priority
 
     local player = game:GetService("Players").LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
@@ -72,6 +75,7 @@ function AnimationLib.PlayAnim(animid, speed, startTime, endTime, priority)
     return track
 end
 
+-- Play animation pack
 function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, climb)
     local Players = game:GetService("Players")
     local player = Players.LocalPlayer
@@ -232,6 +236,7 @@ function AnimationLib.PlayPack(walkSpeedThreshold, idle, walk, run, jump, fall, 
     }
 end
 
+-- Stop all animations
 function AnimationLib.StopAll()
     local player = game:GetService("Players").LocalPlayer
     local character = player.Character
@@ -248,35 +253,54 @@ function AnimationLib.StopAll()
     end
 end
 
+-- Animation replacement system
 function AnimationLib.ReplaceAnimations(replacementTable)
     if not replacementTable or type(replacementTable) ~= "table" then
         warn("ReplaceAnimations: Invalid replacement table provided!")
         return
     end
-    local player = game:GetService("Players").LocalPlayer
-    local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 
-    if not humanoid then
-        warn("ReplaceAnimations: Humanoid not found!")
-        return
-    end
+    local player = game:GetService("Players").LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local humanoid = character:WaitForChild("Humanoid")
+
     local function onAnimationPlayed(animationTrack)
-        local animId = animationTrack.Animation.AnimationId:match("(%d+)") or animationTrack.Name
+        -- Extract animation ID (handles both numeric IDs and full rbxassetid URLs)
+        local animId = tostring(animationTrack.Animation.AnimationId)
+        animId = animId:match("(%d+)") or animationTrack.Name
+
+        -- Check if this animation should be replaced
         if replacementTable[animId] then
             animationTrack:Stop()
+
             local replacementId = replacementTable[animId]
+            if not tostring(replacementId):find("rbxassetid://") then
+                replacementId = "rbxassetid://" .. replacementId
+            end
+
             local newAnim = Instance.new("Animation")
-            newAnim.AnimationId = "rbxassetid://" .. replacementId
+            newAnim.AnimationId = replacementId
             local newTrack = humanoid:LoadAnimation(newAnim)
             newTrack:Play()
+
             print(`Replaced {animId} → {replacementId}`)
         end
     end
-    humanoid.AnimationPlayed:Connect(onAnimationPlayed)
-    return function(newTable)
-        replacementTable = newTable or replacementTable
-        print("Replacement table updated!")
-    end
+
+    -- Connect the event
+    local connection = humanoid.AnimationPlayed:Connect(onAnimationPlayed)
+
+    -- Return functions to update replacements or disconnect
+    return {
+        Update = function(newTable)
+            replacementTable = newTable or replacementTable
+            print("Replacement table updated!")
+        end,
+        Disconnect = function()
+            connection:Disconnect()
+            print("Animation replacement disconnected!")
+        end
+    }
 end
 
 return AnimationLib
