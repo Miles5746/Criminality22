@@ -253,7 +253,6 @@ function AnimationLib.StopAll()
     end
 end
 
--- Animation replacement system
 function AnimationLib.ReplaceAnimations(replacementTable)
     if not replacementTable or type(replacementTable) ~= "table" then
         warn("ReplaceAnimations: Invalid replacement table provided!")
@@ -261,44 +260,54 @@ function AnimationLib.ReplaceAnimations(replacementTable)
     end
 
     local player = game:GetService("Players").LocalPlayer
-    local character = player.Character or player.CharacterAdded:Wait()
-    local humanoid = character:WaitForChild("Humanoid")
+    local connection = nil
+    local currentReplacements = replacementTable
 
-    local function onAnimationPlayed(animationTrack)
-        -- Extract animation ID (handles both numeric IDs and full rbxassetid URLs)
-        local animId = tostring(animationTrack.Animation.AnimationId)
-        animId = animId:match("(%d+)") or animationTrack.Name
-
-        -- Check if this animation should be replaced
-        if replacementTable[animId] then
-            animationTrack:Stop()
-
-            local replacementId = replacementTable[animId]
-            if not tostring(replacementId):find("rbxassetid://") then
-                replacementId = "rbxassetid://" .. replacementId
-            end
-
-            local newAnim = Instance.new("Animation")
-            newAnim.AnimationId = replacementId
-            local newTrack = humanoid:LoadAnimation(newAnim)
-            newTrack:Play()
-
-            print(`Replaced {animId} → {replacementId}`)
+    local function setupCharacter(character)
+        if connection then
+            connection:Disconnect()
         end
+
+        local humanoid = character:WaitForChild("Humanoid")
+
+        local function onAnimationPlayed(animationTrack)
+            local animId = tostring(animationTrack.Animation.AnimationId)
+            animId = animId:match("(%d+)") or animationTrack.Name
+
+            if currentReplacements[animId] then
+                animationTrack:Stop()
+
+                local replacementId = currentReplacements[animId]
+                if not tostring(replacementId):find("rbxassetid://") then
+                    replacementId = "rbxassetid://" .. replacementId
+                end
+
+                local newAnim = Instance.new("Animation")
+                newAnim.AnimationId = replacementId
+                local newTrack = humanoid:LoadAnimation(newAnim)
+                newTrack:Play()
+            end
+        end
+
+        connection = humanoid.AnimationPlayed:Connect(onAnimationPlayed)
     end
 
-    -- Connect the event
-    local connection = humanoid.AnimationPlayed:Connect(onAnimationPlayed)
+    -- Initial setup
+    if player.Character then
+        setupCharacter(player.Character)
+    end
 
-    -- Return functions to update replacements or disconnect
+    -- Handle respawns
+    player.CharacterAdded:Connect(setupCharacter)
+
     return {
         Update = function(newTable)
-            replacementTable = newTable or replacementTable
-            print("Replacement table updated!")
+            currentReplacements = newTable or currentReplacements
         end,
         Disconnect = function()
-            connection:Disconnect()
-            print("Animation replacement disconnected!")
+            if connection then
+                connection:Disconnect()
+            end
         end
     }
 end
